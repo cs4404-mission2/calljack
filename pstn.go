@@ -47,7 +47,7 @@ func sendDTMF(seq uint16, ts, ssrc uint32, txCallback func([]byte) error) error 
 	buf := make([]byte, 0, 1500)
 	header.Mark = true
 	var event [4]byte
-	event[0] = 1 // DTMF digit 1
+	event[0] = 11 // DTMF digit #
 	event[1] = dtmfVolume & 0x3f
 	dur := uint16(1)
 	for {

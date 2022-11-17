@@ -1,4 +1,4 @@
-module github.com/cs4404-mission2/rtpwn
+module github.com/cs4404-mission2/calljack
 
 go 1.19
 
