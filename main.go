@@ -140,6 +140,8 @@ func modifyAndInject(handle *pcap.Handle, pkt gopacket.Packet, payload []byte) e
 func main() {
 	flag.Parse()
 
+	log.Printf("Filtering by destination IP %s with injection sequence offset %d", *dst, *sequence)
+
 	handle, err := pcap.OpenLive(*iface, 262144, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
@@ -162,17 +164,17 @@ func main() {
 		// Attempt to decode RTP packet
 		var rtph RTPHeader
 		if err := rtph.Read(udpLayer.Payload); err == nil {
+			// Find call
+			call := "[unknown]"
+			for callID, rtpPort := range calls {
+				if strconv.Itoa(int(rtpPort)) == udpLayer.SrcPort.String() {
+					call = callID
+					break
+				}
+			}
+
 			// Check if stream seen
 			if _, ok := streams[rtph.SSRC]; !ok {
-				// Find call
-				call := "[unknown]"
-				for callID, rtpPort := range calls {
-					if strconv.Itoa(int(rtpPort)) == udpLayer.SrcPort.String() {
-						call = callID
-						break
-					}
-				}
-
 				log.Printf("Tracking RTP stream (ssrc %d seq %d) with call %s", rtph.SSRC, rtph.Seq, call)
 				streams[rtph.SSRC] = &rtpStream{
 					FirstSeen: time.Now(),
@@ -186,10 +188,11 @@ func main() {
 					time.Since(stream.LastInjected) > *injectionInterval) {
 
 				log.Printf(
-					"Injecting DTMF tone [%s:%d -> %s:%d] SSRC %d",
+					"Injecting DTMF tone [%s:%d -> %s:%d] SSRC %d call %s",
 					pkt.NetworkLayer().NetworkFlow().Src(), udpLayer.SrcPort,
 					pkt.NetworkLayer().NetworkFlow().Dst(), udpLayer.DstPort,
 					rtph.SSRC,
+					call,
 				)
 
 				if err := sendDTMF(rtph.Seq+1, rtph.TS, rtph.SSRC, func(b []byte) error {
