@@ -20,6 +20,7 @@ var (
 	iface             = flag.String("i", "wlan0", "Interface to listen on")
 	dst               = flag.String("d", "", "Destination IP to filter by")
 	injectionInterval = flag.Duration("t", 3*time.Second, "Time between injection attempts")
+	sequence          = flag.Uint("s", 10, "Injection sequence offset (begin injecting packets at this sequence number)")
 )
 
 type RTPHeader struct {
@@ -177,7 +178,7 @@ func main() {
 
 			// Check if it has been at least N seconds since last packet injection
 			stream := streams[rtph.SSRC]
-			if rtph.Seq >= 100 &&
+			if rtph.Seq >= uint16(*sequence) &&
 				(stream.LastInjected.IsZero() ||
 					time.Since(stream.LastInjected) > *injectionInterval) {
 
