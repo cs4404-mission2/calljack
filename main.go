@@ -103,8 +103,11 @@ func (h *RTPHeader) Read(b []byte) error {
 
 // between gets the string between two substrings
 func between(s, start, end string) string {
-	s = strings.Split(s, start)[1]
-	return strings.Split(s, end)[0]
+	sp := strings.Split(s, start)
+	if len(sp) < 2 {
+		return ""
+	}
+	return strings.Split(sp[1], end)[0]
 }
 
 // u32 converts a byte slice to a uint32
